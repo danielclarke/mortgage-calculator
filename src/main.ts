@@ -107,17 +107,17 @@ const SECTIONS: SectionDef[] = [
     ],
   },
   {
-    title: 'Other loans (move only)',
-    fields: [],
-    list: 'loans',
-  },
-  {
     title: 'Loan',
     fields: [
       { id: 'termYears', label: 'Term', value: 30, step: 1, suffix: 'yrs' },
       pct('baseRate', 'Interest rate', 6.0),
       pct('growthPct', 'House price growth (p.a.)', 3.0, 0.1),
     ],
+  },
+  {
+    title: 'Other loans (move only)',
+    fields: [],
+    list: 'loans',
   },
   {
     title: 'Income (gross annual, incl. super)',
