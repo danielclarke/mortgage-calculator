@@ -606,12 +606,30 @@ function update(): void {
   const signed = (x: number) => (x > 0 ? '+' : x < 0 ? '−' : '') + $(Math.abs(x));
 
   const moveLeft = netMonthly - firstPayment - outgoingAt(0);
+  const shortfall = netMonthly - stayFirst - moveLeft;
+  const netOf = (pkg: number) => calcTax(pkg / (1 + SUPER_RATE)).net;
+  const extraPackage = (base: number, extraNetAnnual: number) => {
+    const target = netOf(base) + extraNetAnnual;
+    let lo = 0;
+    let hi = extraNetAnnual * 3 + 1000;
+    for (let i = 0; i < 60; i++) {
+      const mid = (lo + hi) / 2;
+      if (netOf(base + mid) < target) lo = mid;
+      else hi = mid;
+    }
+    return hi;
+  };
+  const extraIncomeText =
+    shortfall > 0
+      ? `${$(shortfall)}/mth net · package +${$(extraPackage(v('incomeA'), shortfall * 12))}/yr (A) or +${$(extraPackage(v('incomeB'), shortfall * 12))}/yr (B)`
+      : 'None: moving leaves the same or more';
   const headRow = (label: string, stayV: string, moveV: string, diff: string) =>
     `<tr><td>${label}</td><td>${stayV}</td><td>${moveV}</td><td>${diff}</td></tr>`;
   document.getElementById('headline')!.innerHTML = `<h2>Stay vs move</h2><table>
     <tr><th></th><th>Stay</th><th>Move</th><th>Difference</th></tr>
     ${headRow('Monthly repayment (year 1)', $(stayFirst), $(firstPayment), signed(firstPayment - stayFirst))}
     ${headRow('Left to live on per month', $(netMonthly - stayFirst), $(moveLeft), signed(moveLeft - (netMonthly - stayFirst)))}
+    <tr><td>Extra income to match stay (year 1)</td><td colspan="3">${extraIncomeText}</td></tr>
     ${headRow('Debt-free', debtFreeText(stayPaidOff), debtFreeText(movePaidOff), extraMonths >= 0 ? `+${duration(extraMonths)}` : `−${duration(-extraMonths)}`)}
   </table>`;
 
