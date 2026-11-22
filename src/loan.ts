@@ -14,7 +14,7 @@ export interface SimResult {
   totalPaid: number;
 }
 
-function amortPayment(principal: number, monthlyRate: number, months: number): number {
+export function amortPayment(principal: number, monthlyRate: number, months: number): number {
   if (months <= 0) return principal;
   if (monthlyRate === 0) return principal / months;
   return (principal * monthlyRate) / (1 - Math.pow(1 + monthlyRate, -months));

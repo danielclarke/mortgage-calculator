@@ -1,3 +1,5 @@
+import { numberInput, parseNum } from './numinput';
+
 export type Item = Record<string, string | number>;
 
 export interface Column {
@@ -33,13 +35,8 @@ function control(col: Column, item: Item): HTMLElement {
   const wrap = document.createElement('div');
   wrap.className = 'input-wrap';
   if (col.prefix) wrap.append(Object.assign(document.createElement('span'), { textContent: col.prefix }));
-  const input = Object.assign(document.createElement('input'), {
-    type: 'number',
-    value: String(item[col.key]),
-    step: String(col.step ?? 1),
-    min: '0',
-  });
-  input.addEventListener('input', () => (item[col.key] = Number(input.value) || 0));
+  const input = numberInput(item[col.key]);
+  input.addEventListener('input', () => (item[col.key] = parseNum(input.value)));
   wrap.append(input);
   if (col.suffix) wrap.append(Object.assign(document.createElement('span'), { textContent: col.suffix }));
   return wrap;
@@ -48,7 +45,7 @@ function control(col: Column, item: Item): HTMLElement {
 export function listEditor(def: ListDef, items: Item[], onChange: () => void): { el: HTMLElement; redraw: () => void } {
   const el = document.createElement('div');
   el.className = 'list';
-  const compact = def.columns.length === 2;
+  const compact = def.columns.length <= 3;
 
   const redraw = () => {
     el.replaceChildren(Object.assign(document.createElement('div'), { className: 'list-title', textContent: def.title }));
@@ -63,7 +60,7 @@ export function listEditor(def: ListDef, items: Item[], onChange: () => void): {
       });
       const [nameCol, ...rest] = def.columns;
       if (compact) {
-        row.append(control(nameCol, item), control(rest[0], item), remove);
+        row.append(control(nameCol, item), remove, ...rest.map((c) => control(c, item)));
       } else {
         const head = document.createElement('div');
         head.className = 'list-head';
