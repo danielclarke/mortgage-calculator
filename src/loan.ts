@@ -20,7 +20,7 @@ function amortPayment(principal: number, monthlyRate: number, months: number): n
   return (principal * monthlyRate) / (1 - Math.pow(1 + monthlyRate, -months));
 }
 
-export function simulate(principal: number, months: number, annualRates: number[], offset: number, fixedPayment?: number): SimResult {
+export function simulate(principal: number, months: number, annualRates: number[], offset: number | ((month: number) => number), fixedPayment?: number): SimResult {
   const rows: MonthRow[] = [];
   let balance = principal;
   let payment = 0;
@@ -40,7 +40,7 @@ export function simulate(principal: number, months: number, annualRates: number[
       payment = fixedPayment ?? amortPayment(balance, r, months - m);
       prevRate = rate;
     }
-    const interest = Math.max(0, balance - offset) * r;
+    const interest = Math.max(0, balance - (typeof offset === 'function' ? offset(m) : offset)) * r;
     const paid = Math.min(payment, balance + interest);
     const principalPaid = paid - interest;
     balance -= principalPaid;

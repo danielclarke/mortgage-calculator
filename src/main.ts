@@ -33,6 +33,10 @@ const SECTIONS: SectionDef[] = [
       money('stayRepayment', 'Current monthly repayment', 3000, 50),
       pct('commissionPct', 'Agent commission (incl. GST)', 2.5, 0.1),
       money('marketing', 'Marketing', 5000, 500),
+      money('prepPainting', 'Prep: painting', 0, 500),
+      money('prepDeck', 'Prep: deck re-oil', 0, 100),
+      money('prepCarpets', 'Prep: carpets', 0, 500),
+      money('prepFloors', 'Prep: timber floors', 0, 500),
     ],
   },
   {
@@ -44,6 +48,13 @@ const SECTIONS: SectionDef[] = [
     fields: [
       money('currentOffset', 'Current offset balance', 50000, 1000),
       money('proceedsToOffset', 'Sale proceeds to offset', 0, 1000),
+    ],
+  },
+  {
+    title: 'Parental loan (interest free, move only)',
+    fields: [
+      money('parentLoan', 'Amount', 0, 5000),
+      money('parentRepay', 'Monthly repayment', 0, 100),
     ],
   },
   {
@@ -358,7 +369,8 @@ function renderScenario(
   key: 'move' | 'stay',
   sim: SimResult,
   noOffset: SimResult,
-  offset: number,
+  offsetAt: (m: number) => number,
+  owedAt: (m: number) => number,
   price: number,
   months: number,
   horizon: number,
@@ -375,7 +387,7 @@ function renderScenario(
   const interest = r.map((x) => x.interest);
   const principal = r.map((x) => x.principal);
   const saved = r.map((row, i) => noOffset.rows[i].interest - row.interest);
-  const netWorth = balance.map((b, i) => houseValue(price, i + 1) + offset - b);
+  const netWorth = balance.map((b, i) => houseValue(price, i + 1) + offsetAt(i + 1) - owedAt(i + 1) - b);
   const horizonYears = horizon / 12;
 
   document.getElementById(`${key}Cards`)!.innerHTML = '<h2>Summary</h2><table class="summary">' + [
@@ -384,9 +396,9 @@ function renderScenario(
     card('Left to live on', $(netMonthly - first), `per month · net income ${$(netMonthly)}`),
     card('Repayment / gross income', grossMonthly ? fmtPct(first / grossMonthly) : '–', 'Year 1'),
     card('Total interest', $(sim.totalInterest), `without offset ${$(noOffset.totalInterest)}`),
-    card('Interest saved by offset', $(noOffset.totalInterest - sim.totalInterest), `offset ${$(offset)}`),
+    card('Interest saved by offset', $(noOffset.totalInterest - sim.totalInterest), `offset ${$(offsetAt(0))}`),
     card('Paid off in', duration(paidOff), `term ${duration(months)}`),
-    card(`Net worth, year ${Math.round(horizonYears)}`, $(netWorth[horizon - 1]), 'house + offset − loan'),
+    card(`Net worth, year ${Math.round(horizonYears)}`, $(netWorth[horizon - 1]), 'house + offset − loans'),
   ].join('') + '</table>';
 
   setChart(`${key}Monthly`, [
@@ -406,7 +418,7 @@ function renderScenario(
   setChart(`${key}Balance`, [
     series('Loan balance', COLORS.principal, balance, { fill: 'origin' }),
     series('Loan balance (no offset)', COLORS.income, noOffset.rows.map((x) => x.balance), { borderDash: [4, 3] }),
-    series('Offset', COLORS.offset, balance.map(() => offset)),
+    series('Offset', COLORS.offset, balance.map((_, i) => offsetAt(i + 1))),
   ], horizonYears);
 
   setChart(`${key}Cash`, [
@@ -452,6 +464,10 @@ function update(): void {
   const sellCosts: [string, number][] = [
     ['Agent commission', commission],
     ['Marketing', v('marketing')],
+    ['Prep: painting', v('prepPainting')],
+    ['Prep: deck re-oil', v('prepDeck')],
+    ['Prep: carpets', v('prepCarpets')],
+    ['Prep: timber floors', v('prepFloors')],
     ['Conveyancing', v('sellConveyancing')],
     ['Mortgage discharge', v('dischargeFee')],
   ];
@@ -476,11 +492,15 @@ function update(): void {
   const lvr = v('purchasePrice') > 0 ? baseLoan / v('purchasePrice') : 0;
   const lmi = lmiEstimate(baseLoan, lvr);
   const loan = baseLoan + lmi.premium;
-  const offset = v('currentOffset') + toOffset;
+  const parentLoan = v('parentLoan');
+  const parentRepay = v('parentRepay');
+  const parentOwed = (m: number) => (parentRepay > 0 ? Math.max(0, parentLoan - parentRepay * m) : parentLoan);
+  const baseOffset = v('currentOffset') + toOffset;
+  const offsetAt = (m: number) => baseOffset + parentOwed(m);
   const years = termYears();
   const months = years * 12;
 
-  const withOffset = simulate(loan, months, rates, offset);
+  const withOffset = simulate(loan, months, rates, offsetAt);
   const noOffset = simulate(loan, months, rates, 0);
 
   const taxA = calcTax(v('incomeA') / (1 + SUPER_RATE));
@@ -519,6 +539,7 @@ function update(): void {
   if (lmi.premium) warnings.push(`LVR above 80%. LMI estimated at ${fmtPct(lmi.rate)} of the loan and added to the loan.`);
   if (lvr > 0.95) warnings.push('LVR above 95%. Most lenders will not lend at this LVR.');
   if (netMonthly - firstPayment < 0) warnings.push('Repayment exceeds net household income.');
+  if (parentLoan > 0 && parentRepay <= 0) warnings.push('Parental loan has no monthly repayment set. It stays in the offset for the life of the loan.');
   if (v('payout') > 0 && stayFull.payoffMonth === null) warnings.push('Current repayment does not pay off the current debt within 40 years.');
   document.getElementById('warnings')!.innerHTML = warnings.map((w) => `<div class="warn">${w}</div>`).join('');
 
@@ -544,26 +565,31 @@ function update(): void {
   document.getElementById('incomeTable')!.innerHTML = incomeTable(taxA, taxB);
 
   const stayNoOffset = simulate(v('payout'), MAX_MONTHS, rates, 0, v('stayRepayment'));
-  renderScenario('move', withOffset, noOffset, offset, v('purchasePrice'), months, horizon, netMonthly, grossMonthly, houseValue, [
+  renderScenario('move', withOffset, noOffset, offsetAt, parentOwed, v('purchasePrice'), months, horizon, netMonthly, grossMonthly, houseValue, [
     card('Loan amount', $(loan), `LVR ${fmtPct(lvr)}${lmi.premium ? ` · incl. LMI ${$(lmi.premium)}` : ''}`),
     subCard('Current debt', $(v('payout'))),
     subCard('Additional debt', $(loan - v('payout'))),
     card('Total moving costs', $(sellCostTotal + buyCostTotal), 'sale + purchase'),
+    ...(parentLoan > 0
+      ? [card('Parental loan', $(parentLoan), parentRepay > 0 ? `${$(parentRepay)}/mth from offset · repaid in ${duration(Math.ceil(parentLoan / parentRepay))}` : 'no repayment set')]
+      : []),
   ]);
-  renderScenario('stay', stay, stayNoOffset, v('currentOffset'), v('salePrice'), stayMonths, horizon, netMonthly, grossMonthly, houseValue, [
+  renderScenario('stay', stay, stayNoOffset, () => v('currentOffset'), () => 0, v('salePrice'), stayMonths, horizon, netMonthly, grossMonthly, houseValue, [
     card('Loan amount', $(v('payout')), `repayment ${$(v('stayRepayment'))}/mth`),
   ]);
 
   document.getElementById('assumptions')!.innerHTML = `<strong>Assumptions</strong><ul>
     <li>Principal &amp; interest, monthly. Repayment recalculated over the remaining term whenever the rate changes.</li>
-    <li>Offset balance stays constant. Interest is charged on loan balance minus offset.</li>
+    <li>Offset balance stays constant, except for the parental loan. Interest is charged on loan balance minus offset.</li>
+    <li>Sale preparation costs are deducted from sale proceeds.</li>
+    <li>Parental loan (move only): added to the offset at settlement, repaid from the offset in fixed monthly amounts. Net worth subtracts the amount still owed.</li>
     <li>QLD transfer duty uses the home concession rates (owner-occupier, not first home).</li>
     <li>Title transfer and mortgage registration fees: Titles Queensland FY2026-27 schedule.</li>
     <li>LMI is a rough estimate by LVR band. Actual premiums vary by lender and insurer.</li>
     <li>Tax: ${TAX_YEAR} resident rates, $1,000 standard deduction, LITO, 2% Medicare levy with low-income reduction. No Medicare levy surcharge, HECS/HELP or salary sacrifice.</li>
     <li>Income held constant for the life of the loan.</li>
     <li>Stay: current debt repaid at the current monthly repayment until paid off, same rate table, current offset balance. Years beyond the rate table use the last rate.</li>
-    <li>Net worth = house value + offset − loan balance. House value grows at the growth rate. Selling and buying costs for any future sale are excluded. Repayments freed after payoff are not counted as savings.</li>
+    <li>Net worth = house value + offset − loan balance − parental loan owed. House value grows at the growth rate. Selling and buying costs for any future sale are excluded. Repayments freed after payoff are not counted as savings.</li>
   </ul>
   <strong>Sources</strong><ul>
     <li><a href="https://qro.qld.gov.au/duties/transfer-duty/calculate/concession-rates/" target="_blank" rel="noopener">QRO: transfer duty home concession rates</a></li>
