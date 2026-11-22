@@ -94,3 +94,16 @@ tr.total td { border-top: 1px solid var(--border); font-weight: 600; }
 .export { width: 100%; font: inherit; padding: 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); cursor: pointer; }
 .export-out { width: 100%; height: 160px; margin-top: 6px; font: 12px ui-monospace, monospace; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; }
 .summary tr.sub td:first-child { padding-left: 16px; }
+#results, aside { min-width: 0; }
+.headline { overflow-x: auto; }
+@media (max-width: 600px) {
+  header { padding: 16px 16px 0; }
+  main { gap: 12px; }
+  .field { grid-template-columns: 1fr 120px; }
+  .chart canvas { height: 240px !important; }
+  .headline td, .headline th { padding: 4px 4px; font-size: 13px; }
+  .summary tr { display: grid; grid-template-columns: 1fr auto; }
+  .summary td.detail { grid-column: 1 / -1; text-align: left; padding: 0 0 4px; }
+  .summary tr.sub td.detail { padding-left: 16px; }
+  .tables { grid-template-columns: 1fr; }
+}
