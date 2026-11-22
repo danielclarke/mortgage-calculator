@@ -120,7 +120,7 @@ const SECTIONS: SectionDef[] = [
     list: 'loans',
   },
   {
-    title: 'Income (gross annual, incl. super)',
+    title: 'Income (gross salary, super on top)',
     fields: [
       money('incomeA', 'Person A', 100000, 1000),
       money('incomeB', 'Person B', 80000, 1000),
@@ -584,8 +584,8 @@ function update(): void {
   const withOffset = simulate(loan, months, rates, offsetAt);
   const noOffset = simulate(loan, months, rates, 0);
 
-  const taxA = calcTax(v('incomeA') / (1 + SUPER_RATE));
-  const taxB = calcTax(v('incomeB') / (1 + SUPER_RATE));
+  const taxA = calcTax(v('incomeA'));
+  const taxB = calcTax(v('incomeB'));
   const netMonthly = (taxA.net + taxB.net) / 12;
   const grossMonthly = (taxA.gross + taxB.gross) / 12;
   const firstPayment = withOffset.rows[0]?.payment ?? 0;
@@ -607,8 +607,8 @@ function update(): void {
 
   const moveLeft = netMonthly - firstPayment - outgoingAt(0);
   const shortfall = netMonthly - stayFirst - moveLeft;
-  const netOf = (pkg: number) => calcTax(pkg / (1 + SUPER_RATE)).net;
-  const extraPackage = (base: number, extraNetAnnual: number) => {
+  const netOf = (salary: number) => calcTax(salary).net;
+  const extraSalary = (base: number, extraNetAnnual: number) => {
     const target = netOf(base) + extraNetAnnual;
     let lo = 0;
     let hi = extraNetAnnual * 3 + 1000;
@@ -621,7 +621,7 @@ function update(): void {
   };
   const extraIncomeText =
     shortfall > 0
-      ? `${$(shortfall)}/mth net · package +${$(extraPackage(v('incomeA'), shortfall * 12))}/yr (A) or +${$(extraPackage(v('incomeB'), shortfall * 12))}/yr (B)`
+      ? `${$(shortfall)}/mth net · salary +${$(extraSalary(v('incomeA'), shortfall * 12))}/yr (A) or +${$(extraSalary(v('incomeB'), shortfall * 12))}/yr (B)`
       : 'None: moving leaves the same or more';
   const headRow = (label: string, stayV: string, moveV: string, diff: string) =>
     `<tr><td>${label}</td><td>${stayV}</td><td>${moveV}</td><td>${diff}</td></tr>`;
