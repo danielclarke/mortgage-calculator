@@ -62,3 +62,37 @@ export function lmiEstimate(loan: number, lvr: number): { rate: number; premium:
   else if (lvr > 0.8) rate = 0.01;
   return { rate, premium: loan * rate };
 }
+
+export interface SideLoan {
+  owed: number[];
+  paid: number[];
+  payoffMonth: number | null;
+  totalInterest: number;
+}
+
+export function sideLoanSchedule(amount: number, annualRate: number, repay: number, months: number): SideLoan {
+  const owed = [Math.max(0, amount)];
+  const paid: number[] = [];
+  let balance = Math.max(0, amount);
+  let totalInterest = 0;
+  let payoffMonth: number | null = balance <= 0 ? 0 : null;
+  const r = annualRate / 100 / 12;
+  for (let m = 0; m < months; m++) {
+    if (balance <= 0.005) {
+      paid.push(0);
+      owed.push(0);
+      continue;
+    }
+    const interest = balance * r;
+    const p = Math.min(repay, balance + interest);
+    balance = balance + interest - p;
+    totalInterest += interest;
+    if (balance <= 0.005) {
+      balance = 0;
+      payoffMonth ??= m + 1;
+    }
+    paid.push(p);
+    owed.push(balance);
+  }
+  return { owed, paid, payoffMonth, totalInterest };
+}

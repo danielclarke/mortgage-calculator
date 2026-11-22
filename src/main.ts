@@ -2,7 +2,8 @@ import './style.css';
 import { Chart, registerables, type ChartDataset } from 'chart.js';
 import { calcTax, SUPER_RATE, TAX_YEAR, type TaxResult } from './tax';
 import { homeConcessionDuty, transferFee } from './duty';
-import { simulate, lmiEstimate, type SimResult } from './loan';
+import { simulate, lmiEstimate, sideLoanSchedule, type SimResult } from './loan';
+import { listEditor, encodeList, decodeList, type Item, type ListDef } from './lists';
 
 Chart.register(...registerables);
 
@@ -15,11 +16,66 @@ interface FieldDef {
   suffix?: string;
 }
 
+type ListKey = 'sellCosts' | 'buyCosts' | 'loans';
+
 interface SectionDef {
   title: string;
   fields: FieldDef[];
   collapsible?: boolean;
+  list?: ListKey;
 }
+
+const LISTS: Record<ListKey, ListDef> = {
+  sellCosts: {
+    title: 'Sale costs',
+    columns: [
+      { key: 'name', label: 'Item', type: 'text' },
+      { key: 'amount', label: 'Amount', type: 'number', step: 100, prefix: '$' },
+    ],
+    blank: () => ({ name: '', amount: 0 }),
+    defaults: [
+      { name: 'Marketing', amount: 5000 },
+      { name: 'Conveyancing (incl. disclosure statement)', amount: 1500 },
+      { name: 'Mortgage discharge', amount: 400 },
+      { name: 'Building & pest report', amount: 600 },
+    ],
+  },
+  buyCosts: {
+    title: 'Purchase costs',
+    columns: [
+      { key: 'name', label: 'Item', type: 'text' },
+      { key: 'amount', label: 'Amount', type: 'number', step: 100, prefix: '$' },
+    ],
+    blank: () => ({ name: '', amount: 0 }),
+    defaults: [
+      { name: 'Building & pest', amount: 650 },
+      { name: 'Conveyancing', amount: 2000 },
+      { name: 'Mortgage registration', amount: 248.04 },
+      { name: 'Removalist', amount: 2500 },
+    ],
+  },
+  loans: {
+    title: 'Loans',
+    columns: [
+      { key: 'name', label: 'Name', type: 'text' },
+      { key: 'amount', label: 'Amount', type: 'number', step: 1000, prefix: '$' },
+      { key: 'rate', label: 'Rate', type: 'number', step: 0.05, suffix: '%' },
+      { key: 'repay', label: 'Monthly repayment', type: 'number', step: 100, prefix: '$' },
+      { key: 'into', label: 'Paid into', type: 'select', options: ['offset', 'deposit'] },
+      { key: 'from', label: 'Repay from', type: 'select', options: ['offset', 'income'] },
+    ],
+    blank: () => ({ name: 'Loan', amount: 0, rate: 0, repay: 0, into: 'offset', from: 'offset' }),
+    defaults: [],
+  },
+};
+
+const lists: Record<ListKey, Item[]> = {
+  sellCosts: LISTS.sellCosts.defaults.map((x) => ({ ...x })),
+  buyCosts: LISTS.buyCosts.defaults.map((x) => ({ ...x })),
+  loans: LISTS.loans.defaults.map((x) => ({ ...x })),
+};
+const listRedraws: Partial<Record<ListKey, () => void>> = {};
+const MAX_MONTHS = 480;
 
 const money = (id: string, label: string, value: number, step = 1000): FieldDef => ({ id, label, value, step, prefix: '$' });
 const pct = (id: string, label: string, value: number, step = 0.05): FieldDef => ({ id, label, value, step, suffix: '%' });
@@ -32,16 +88,13 @@ const SECTIONS: SectionDef[] = [
       money('payout', 'Current debt', 400000, 5000),
       money('stayRepayment', 'Current monthly repayment', 3000, 50),
       pct('commissionPct', 'Agent commission (incl. GST)', 2.5, 0.1),
-      money('marketing', 'Marketing', 5000, 500),
-      money('prepPainting', 'Prep: painting', 0, 500),
-      money('prepDeck', 'Prep: deck re-oil', 0, 100),
-      money('prepCarpets', 'Prep: carpets', 0, 500),
-      money('prepFloors', 'Prep: timber floors', 0, 500),
     ],
+    list: 'sellCosts',
   },
   {
     title: 'Buying',
     fields: [money('purchasePrice', 'Purchase price', 1100000, 5000)],
+    list: 'buyCosts',
   },
   {
     title: 'Offset',
@@ -51,11 +104,9 @@ const SECTIONS: SectionDef[] = [
     ],
   },
   {
-    title: 'Parental loan (interest free, move only)',
-    fields: [
-      money('parentLoan', 'Amount', 0, 5000),
-      money('parentRepay', 'Monthly repayment', 0, 100),
-    ],
+    title: 'Other loans (move only)',
+    fields: [],
+    list: 'loans',
   },
   {
     title: 'Loan',
@@ -72,18 +123,6 @@ const SECTIONS: SectionDef[] = [
       money('incomeB', 'Person B', 80000, 1000),
       { id: 'ageA', label: 'Person A age', value: 40, step: 1, suffix: 'yrs' },
       { id: 'ageB', label: 'Person B age', value: 40, step: 1, suffix: 'yrs' },
-    ],
-  },
-  {
-    title: 'Extra costs',
-    collapsible: true,
-    fields: [
-      money('sellConveyancing', 'Conveyancing (sale)', 1500, 100),
-      money('dischargeFee', 'Mortgage discharge', 400, 50),
-      money('buyConveyancing', 'Conveyancing (purchase)', 2000, 100),
-      money('buildingPest', 'Building & pest', 650, 50),
-      money('mortgageReg', 'Mortgage registration', 248.04, 10),
-      money('removalist', 'Removalist', 2500, 100),
     ],
   },
 ];
@@ -131,24 +170,17 @@ function buildInputs(): void {
       container.append(Object.assign(document.createElement('legend'), { textContent: s.title }));
     }
     for (const f of s.fields) container.append(inputEl(f));
+    if (s.list) {
+      const key = s.list;
+      const editor = listEditor(LISTS[key], lists[key], () => {
+        update();
+        writeHash();
+      });
+      listRedraws[key] = editor.redraw;
+      container.append(editor.el);
+    }
     root.append(container);
   }
-
-  const exportBtn = Object.assign(document.createElement('button'), { type: 'button', className: 'export', textContent: 'Copy inputs as JSON' });
-  const exportOut = Object.assign(document.createElement('textarea'), { readOnly: true, className: 'export-out', hidden: true });
-  exportBtn.addEventListener('click', async () => {
-    const json = exportInputs();
-    exportOut.value = json;
-    exportOut.hidden = false;
-    exportOut.select();
-    try {
-      await navigator.clipboard.writeText(json);
-      exportBtn.textContent = 'Copied';
-    } catch {
-      exportBtn.textContent = 'Copy failed: select the text below';
-    }
-    setTimeout(() => (exportBtn.textContent = 'Copy inputs as JSON'), 2000);
-  });
 
   const ratesDetails = document.createElement('details');
   ratesDetails.append(Object.assign(document.createElement('summary'), { textContent: 'Interest rate by year' }));
@@ -173,7 +205,7 @@ function buildInputs(): void {
     setTimeout(() => (shareBtn.textContent = 'Copy share link'), 2000);
   });
 
-  root.append(ratesDetails, shareBtn, exportBtn, exportOut);
+  root.append(ratesDetails, shareBtn);
 
   root.addEventListener('input', (e) => {
     const t = e.target as HTMLInputElement;
@@ -198,6 +230,7 @@ function writeHash(): void {
   const params = new URLSearchParams();
   for (const [id] of inputs) params.set(id, String(num(id)));
   params.set('rates', rates.join(','));
+  for (const key of Object.keys(LISTS) as ListKey[]) params.set(key, encodeList(LISTS[key], lists[key]));
   history.replaceState(null, '', `#${params.toString()}`);
 }
 
@@ -211,12 +244,12 @@ function readHash(): void {
   rates = r ? r.split(',').map((x) => Number(x) || 0) : [];
   resizeRates();
   renderRates();
-}
-
-function exportInputs(): string {
-  const values: Record<string, number> = {};
-  for (const [id] of inputs) values[id] = num(id);
-  return JSON.stringify({ inputs: values, ratesByYear: rates }, null, 2);
+  for (const key of Object.keys(LISTS) as ListKey[]) {
+    const val = params.get(key);
+    if (val === null) continue;
+    lists[key].splice(0, lists[key].length, ...decodeList(LISTS[key], val));
+    listRedraws[key]?.();
+  }
 }
 
 function num(id: string): number {
@@ -371,6 +404,7 @@ function renderScenario(
   noOffset: SimResult,
   offsetAt: (m: number) => number,
   owedAt: (m: number) => number,
+  outgoingAt: (m: number) => number,
   price: number,
   months: number,
   horizon: number,
@@ -389,11 +423,13 @@ function renderScenario(
   const saved = r.map((row, i) => noOffset.rows[i].interest - row.interest);
   const netWorth = balance.map((b, i) => houseValue(price, i + 1) + offsetAt(i + 1) - owedAt(i + 1) - b);
   const horizonYears = horizon / 12;
+  const outgoing = payment.map((_, i) => outgoingAt(i));
+  const hasOutgoing = outgoing.some((x) => x > 0);
 
   document.getElementById(`${key}Cards`)!.innerHTML = '<h2>Summary</h2><table class="summary">' + [
     ...extraCards,
     card('Monthly repayment', $(first), `Year 1 at ${rates[0]?.toFixed(2)}%`),
-    card('Left to live on', $(netMonthly - first), `per month · net income ${$(netMonthly)}`),
+    card('Left to live on', $(netMonthly - first - outgoing[0]), `per month · net income ${$(netMonthly)}${outgoing[0] ? ` · other loans ${$(outgoing[0])}` : ''}`),
     card('Repayment / gross income', grossMonthly ? fmtPct(first / grossMonthly) : '–', 'Year 1'),
     card('Total interest', $(sim.totalInterest), `without offset ${$(noOffset.totalInterest)}`),
     card('Interest saved by offset', $(noOffset.totalInterest - sim.totalInterest), `offset ${$(offsetAt(0))}`),
@@ -424,7 +460,8 @@ function renderScenario(
   setChart(`${key}Cash`, [
     series('Net household income', COLORS.income, payment.map(() => netMonthly)),
     series('Repayment', COLORS.payment, payment),
-    series('Left to live on', COLORS.net, payment.map((p) => netMonthly - p), { fill: 'origin' }),
+    ...(hasOutgoing ? [series('Other loan repayments', COLORS.interest, outgoing)] : []),
+    series('Left to live on', COLORS.net, payment.map((p, i) => netMonthly - p - outgoing[i]), { fill: 'origin' }),
   ], horizonYears);
 
   setChart(`${key}NetWorth`, [series('Net worth', COLORS.principal, netWorth)], horizonYears);
@@ -463,13 +500,7 @@ function update(): void {
   const commission = (v('salePrice') * v('commissionPct')) / 100;
   const sellCosts: [string, number][] = [
     ['Agent commission', commission],
-    ['Marketing', v('marketing')],
-    ['Prep: painting', v('prepPainting')],
-    ['Prep: deck re-oil', v('prepDeck')],
-    ['Prep: carpets', v('prepCarpets')],
-    ['Prep: timber floors', v('prepFloors')],
-    ['Conveyancing', v('sellConveyancing')],
-    ['Mortgage discharge', v('dischargeFee')],
+    ...lists.sellCosts.map((it): [string, number] => [String(it.name), Number(it.amount)]),
   ];
   const sellCostTotal = sellCosts.reduce((a, [, x]) => a + x, 0);
   const netProceeds = v('salePrice') - v('payout') - sellCostTotal;
@@ -481,22 +512,51 @@ function update(): void {
   const buyCosts: [string, number][] = [
     ['Transfer duty (home concession)', duty],
     ['Title transfer fee', titleFee],
-    ['Mortgage registration', v('mortgageReg')],
-    ['Conveyancing', v('buyConveyancing')],
-    ['Building & pest', v('buildingPest')],
-    ['Removalist', v('removalist')],
+    ...lists.buyCosts.map((it): [string, number] => [String(it.name), Number(it.amount)]),
   ];
   const buyCostTotal = buyCosts.reduce((a, [, x]) => a + x, 0);
 
-  const baseLoan = Math.max(0, v('purchasePrice') + buyCostTotal - deposit);
+  const depositLoans = lists.loans
+    .filter((l) => l.into === 'deposit' && Number(l.amount) > 0)
+    .map((l): [string, number] => [String(l.name) || 'Loan', Number(l.amount)]);
+  const loanDeposit = depositLoans.reduce((a, [, x]) => a + x, 0);
+  const baseLoan = Math.max(0, v('purchasePrice') + buyCostTotal - deposit - loanDeposit);
   const lvr = v('purchasePrice') > 0 ? baseLoan / v('purchasePrice') : 0;
   const lmi = lmiEstimate(baseLoan, lvr);
   const loan = baseLoan + lmi.premium;
-  const parentLoan = v('parentLoan');
-  const parentRepay = v('parentRepay');
-  const parentOwed = (m: number) => (parentRepay > 0 ? Math.max(0, parentLoan - parentRepay * m) : parentLoan);
   const baseOffset = v('currentOffset') + toOffset;
-  const offsetAt = (m: number) => baseOffset + parentOwed(m);
+  const sideLoans = lists.loans.map((l) => ({
+    name: String(l.name) || 'Loan',
+    amount: Number(l.amount),
+    rate: Number(l.rate),
+    repay: Number(l.repay),
+    intoOffset: l.into !== 'deposit',
+    fromOffset: l.from !== 'income',
+    sched: sideLoanSchedule(Number(l.amount), Number(l.rate), Number(l.repay), MAX_MONTHS),
+  }));
+  const offsetArr: number[] = [];
+  const owedArr: number[] = [];
+  const outArr: number[] = [];
+  const cumPaid = sideLoans.map(() => 0);
+  for (let m = 0; m <= MAX_MONTHS; m++) {
+    let off = baseOffset;
+    let owed = 0;
+    let out = 0;
+    sideLoans.forEach((l, i) => {
+      off += (l.intoOffset ? l.amount : 0) - (l.fromOffset ? cumPaid[i] : 0);
+      owed += l.sched.owed[m] ?? 0;
+      const p = l.sched.paid[m] ?? 0;
+      if (!l.fromOffset) out += p;
+      cumPaid[i] += p;
+    });
+    offsetArr.push(Math.max(0, off));
+    owedArr.push(owed);
+    outArr.push(out);
+  }
+  const at = (arr: number[]) => (m: number) => arr[Math.min(m, arr.length - 1)];
+  const offsetAt = at(offsetArr);
+  const owedAt = at(owedArr);
+  const outgoingAt = at(outArr);
   const years = termYears();
   const months = years * 12;
 
@@ -509,7 +569,6 @@ function update(): void {
   const grossMonthly = (taxA.gross + taxB.gross) / 12;
   const firstPayment = withOffset.rows[0]?.payment ?? 0;
 
-  const MAX_MONTHS = 480;
   const stayFull = simulate(v('payout'), MAX_MONTHS, rates, v('currentOffset'), v('stayRepayment'));
   const stayMonths = Math.max(1, stayFull.payoffMonth ?? MAX_MONTHS);
   const stay = { ...stayFull, rows: stayFull.rows.slice(0, stayMonths) };
@@ -525,12 +584,13 @@ function update(): void {
   const houseValue = (price: number, m: number) => price * Math.pow(1 + growth, m / 12);
   const signed = (x: number) => (x > 0 ? '+' : x < 0 ? '−' : '') + $(Math.abs(x));
 
+  const moveLeft = netMonthly - firstPayment - outgoingAt(0);
   const headRow = (label: string, stayV: string, moveV: string, diff: string) =>
     `<tr><td>${label}</td><td>${stayV}</td><td>${moveV}</td><td>${diff}</td></tr>`;
   document.getElementById('headline')!.innerHTML = `<h2>Stay vs move</h2><table>
     <tr><th></th><th>Stay</th><th>Move</th><th>Difference</th></tr>
     ${headRow('Monthly repayment (year 1)', $(stayFirst), $(firstPayment), signed(firstPayment - stayFirst))}
-    ${headRow('Left to live on per month', $(netMonthly - stayFirst), $(netMonthly - firstPayment), signed(stayFirst - firstPayment))}
+    ${headRow('Left to live on per month', $(netMonthly - stayFirst), $(moveLeft), signed(moveLeft - (netMonthly - stayFirst)))}
     ${headRow('Debt-free', debtFreeText(stayPaidOff), debtFreeText(movePaidOff), extraMonths >= 0 ? `+${duration(extraMonths)}` : `−${duration(-extraMonths)}`)}
   </table>`;
 
@@ -538,8 +598,8 @@ function update(): void {
   if (netProceeds < 0) warnings.push('Sale proceeds are negative: payout and selling costs exceed the sale price.');
   if (lmi.premium) warnings.push(`LVR above 80%. LMI estimated at ${fmtPct(lmi.rate)} of the loan and added to the loan.`);
   if (lvr > 0.95) warnings.push('LVR above 95%. Most lenders will not lend at this LVR.');
-  if (netMonthly - firstPayment < 0) warnings.push('Repayment exceeds net household income.');
-  if (parentLoan > 0 && parentRepay <= 0) warnings.push('Parental loan has no monthly repayment set. It stays in the offset for the life of the loan.');
+  if (moveLeft < 0) warnings.push('Repayments exceed net household income.');
+  for (const l of sideLoans) if (l.amount > 0 && l.sched.payoffMonth === null) warnings.push(`${l.name} is not repaid within 40 years at ${$(l.repay)}/mth.`);
   if (v('payout') > 0 && stayFull.payoffMonth === null) warnings.push('Current repayment does not pay off the current debt within 40 years.');
   document.getElementById('warnings')!.innerHTML = warnings.map((w) => `<div class="warn">${w}</div>`).join('');
 
@@ -559,37 +619,44 @@ function update(): void {
     table('', [
       ['Total required', v('purchasePrice') + buyCostTotal],
       ['Deposit', -deposit],
+      ...depositLoans.map(([n, x]): [string, number] => [n, -x]),
       ...(lmi.premium ? ([['LMI (est.)', lmi.premium]] as [string, number][]) : []),
     ], 'Loan amount');
 
   document.getElementById('incomeTable')!.innerHTML = incomeTable(taxA, taxB);
 
   const stayNoOffset = simulate(v('payout'), MAX_MONTHS, rates, 0, v('stayRepayment'));
-  renderScenario('move', withOffset, noOffset, offsetAt, parentOwed, v('purchasePrice'), months, horizon, netMonthly, grossMonthly, houseValue, [
+  renderScenario('move', withOffset, noOffset, offsetAt, owedAt, outgoingAt, v('purchasePrice'), months, horizon, netMonthly, grossMonthly, houseValue, [
     card('Loan amount', $(loan), `LVR ${fmtPct(lvr)}${lmi.premium ? ` · incl. LMI ${$(lmi.premium)}` : ''}`),
     subCard('Current debt', $(v('payout'))),
     subCard('Additional debt', $(loan - v('payout'))),
     card('Total moving costs', $(sellCostTotal + buyCostTotal), 'sale + purchase'),
-    ...(parentLoan > 0
-      ? [card('Parental loan', $(parentLoan), parentRepay > 0 ? `${$(parentRepay)}/mth from offset · repaid in ${duration(Math.ceil(parentLoan / parentRepay))}` : 'no repayment set')]
-      : []),
+    ...sideLoans
+      .filter((l) => l.amount > 0)
+      .map((l) =>
+        card(
+          l.name,
+          $(l.amount),
+          `into ${l.intoOffset ? 'offset' : 'deposit'} · ${$(l.repay)}/mth from ${l.fromOffset ? 'offset' : 'income'} · ${l.sched.payoffMonth !== null ? `repaid in ${duration(l.sched.payoffMonth)}` : 'not repaid'}${l.sched.totalInterest > 0 ? ` · interest ${$(l.sched.totalInterest)}` : ''}`,
+        ),
+      ),
   ]);
-  renderScenario('stay', stay, stayNoOffset, () => v('currentOffset'), () => 0, v('salePrice'), stayMonths, horizon, netMonthly, grossMonthly, houseValue, [
+  renderScenario('stay', stay, stayNoOffset, () => v('currentOffset'), () => 0, () => 0, v('salePrice'), stayMonths, horizon, netMonthly, grossMonthly, houseValue, [
     card('Loan amount', $(v('payout')), `repayment ${$(v('stayRepayment'))}/mth`),
   ]);
 
   document.getElementById('assumptions')!.innerHTML = `<strong>Assumptions</strong><ul>
     <li>Principal &amp; interest, monthly. Repayment recalculated over the remaining term whenever the rate changes.</li>
-    <li>Offset balance stays constant, except for the parental loan. Interest is charged on loan balance minus offset.</li>
-    <li>Sale preparation costs are deducted from sale proceeds.</li>
-    <li>Parental loan (move only): added to the offset at settlement, repaid from the offset in fixed monthly amounts. Net worth subtracts the amount still owed.</li>
+    <li>Offset balance stays constant, except for other loans. Interest is charged on loan balance minus offset.</li>
+    <li>Sale costs are deducted from sale proceeds. Purchase costs are funded from the deposit and loan.</li>
+    <li>Other loans (move only): paid into the offset or the deposit at settlement. A deposit loan reduces the bank loan, LVR and LMI. Repaid in fixed monthly amounts either from the offset (offset falls) or from income (reduces money left to live on). Interest at the loan's rate is added monthly.</li>
     <li>QLD transfer duty uses the home concession rates (owner-occupier, not first home).</li>
     <li>Title transfer and mortgage registration fees: Titles Queensland FY2026-27 schedule.</li>
     <li>LMI is a rough estimate by LVR band. Actual premiums vary by lender and insurer.</li>
     <li>Tax: ${TAX_YEAR} resident rates, $1,000 standard deduction, LITO, 2% Medicare levy with low-income reduction. No Medicare levy surcharge, HECS/HELP or salary sacrifice.</li>
     <li>Income held constant for the life of the loan.</li>
     <li>Stay: current debt repaid at the current monthly repayment until paid off, same rate table, current offset balance. Years beyond the rate table use the last rate.</li>
-    <li>Net worth = house value + offset − loan balance − parental loan owed. House value grows at the growth rate. Selling and buying costs for any future sale are excluded. Repayments freed after payoff are not counted as savings.</li>
+    <li>Net worth = house value + offset − loan balance − other loans owed. House value grows at the growth rate. Selling and buying costs for any future sale are excluded. Repayments freed after payoff are not counted as savings.</li>
   </ul>
   <strong>Sources</strong><ul>
     <li><a href="https://qro.qld.gov.au/duties/transfer-duty/calculate/concession-rates/" target="_blank" rel="noopener">QRO: transfer duty home concession rates</a></li>
